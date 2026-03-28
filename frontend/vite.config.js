@@ -10,10 +10,12 @@ export default defineConfig({
       '/api/orders': {
         target: 'http://localhost:5001',
         changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
       },
       '/api/drivers': {
         target: 'http://localhost:5002',
         changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },
   },
