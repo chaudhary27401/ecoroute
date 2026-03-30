@@ -37,3 +37,31 @@ def driver_login(phone: str, db: Session = Depends(get_db)):
 @router.get("/")
 def get_drivers(db: Session = Depends(get_db)):
     return db.query(models.Driver).all()
+
+
+#fix 1
+@router.get("/available")
+def get_available_drivers(db: Session = Depends(get_db)):
+    return db.query(models.Driver).filter(models.Driver.status == "AVAILABLE").all()
+
+#fix 2
+@router.patch("/{driver_id}/assign")
+def assign_driver(driver_id: int, db: Session = Depends(get_db)):
+    driver = db.query(models.Driver).filter(models.Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    driver.status = "ASSIGNED"
+    db.commit()
+    db.refresh(driver)
+    return driver
+
+#fix 3
+@router.patch("/{driver_id}/free")
+def free_driver(driver_id: int, db: Session = Depends(get_db)):
+    driver = db.query(models.Driver).filter(models.Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    driver.status = "AVAILABLE"
+    db.commit()
+    db.refresh(driver)
+    return driver
