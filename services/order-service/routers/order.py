@@ -64,7 +64,7 @@ def optimize(db: Session = Depends(get_db)):
     payload = [
         {
             "id": o.id,
-            "location": (o.latitude, o.longitude)
+            "location": [o.latitude, o.longitude]
         }
         for o in orders
     ]

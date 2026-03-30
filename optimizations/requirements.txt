@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+pydantic>=1.10
+scikit-learn
+numpy
+ortools
+openrouteservice
