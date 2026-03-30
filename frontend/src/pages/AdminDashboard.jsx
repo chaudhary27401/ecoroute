@@ -1,333 +1,274 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import MapView from '../components/Map/MapView'
-import { createDriver, createOrder, getDrivers, getOrders, optimizeRoutes } from '../api/client'
+import { getDriverOrders, getDrivers, markOrderDelivered } from '../api/client'
 
-function OrderCard({ order }) {
+function DriverSelector({ drivers, loading, onSelect, onBack }) {
   return (
-    <div className="card">
-      <div className="card-title">{order.order_name || `Order #${order.id}`}</div>
-      <div className="card-meta">{order.address}</div>
-      <div className="card-meta" style={{ marginTop: 4 }}>
-        Size: {order.order_size || 'N/A'} &nbsp;|&nbsp; Driver: {order.driver_id ?? 'Unassigned'}
-      </div>
-      {/* BUG FIX: show ETA if available */}
-      {order.eta != null && (
-        <div className="card-meta" style={{ marginTop: 4 }}>
-          ETA: <strong>{order.eta} min</strong> &nbsp;|&nbsp; Stop #{order.sequence_order}
+    <div className="role-selector">
+      <h1>EcoRoute Driver</h1>
+      <p>Select your driver profile</p>
+
+      {loading ? (
+        <div className="loading">Loading drivers...</div>
+      ) : (
+        <div className="role-cards" style={{ flexWrap: 'wrap', justifyContent: 'center' }}>
+          {drivers.map((driver) => (
+            <div key={driver.id} className="role-card" onClick={() => onSelect(driver)}>
+              <div style={{ fontSize: '2rem' }}>🚚</div>
+              <h3>{driver.name}</h3>
+              <p>{driver.phone}</p>
+              <p style={{ marginTop: 4 }}>
+                <span className={`badge badge-${String(driver.status || '').toLowerCase()}`}>
+                  {driver.status}
+                </span>
+              </p>
+            </div>
+          ))}
         </div>
       )}
-      <div style={{ marginTop: 8 }}>
-        <span className={`badge badge-${String(order.status || '').toLowerCase()}`}>
-          {order.status || 'UNKNOWN'}
-        </span>
-      </div>
+
+      <button className="btn" onClick={onBack} style={{ marginTop: 20, background: '#edf2f7' }}>
+        Back
+      </button>
     </div>
   )
 }
 
-function DriverCard({ driver }) {
-  return (
-    <div className="card">
-      <div className="card-title">{driver.name}</div>
-      <div className="card-meta">{driver.phone}</div>
-      <div className="card-meta" style={{ marginTop: 4 }}>
-        Address: {driver.address || 'N/A'}
-      </div>
-      <div style={{ marginTop: 8 }}>
-        <span className={`badge badge-${String(driver.status || '').toLowerCase()}`}>
-          {driver.status || 'UNKNOWN'}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-function AdminDashboard() {
+function DriverView() {
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState('orders')
-  const [orders, setOrders] = useState([])
   const [drivers, setDrivers] = useState([])
+  const [selectedDriver, setSelectedDriver] = useState(null)
+  const [orders, setOrders] = useState([])
+  const [loadingDrivers, setLoadingDrivers] = useState(true)
+  const [loadingOrders, setLoadingOrders] = useState(false)
+  const [actionLoading, setActionLoading] = useState(null)
   const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [optimizing, setOptimizing] = useState(false)
-  const [showOrderForm, setShowOrderForm] = useState(false)
-  const [showDriverForm, setShowDriverForm] = useState(false)
-  const [orderFormData, setOrderFormData] = useState({
-    order_name: '', order_size: '', address: '', latitude: '', longitude: '',
-  })
-  const [driverFormData, setDriverFormData] = useState({
-    name: '', phone: '', address: '', latitude: '', longitude: '',
-  })
+  // ── NEW: track when driver has finished all stops ─────────────────────────
+  const [allDelivered, setAllDelivered] = useState(false)
 
-  const fetchData = async () => {
-    setLoading(true)
+  const loadDrivers = async () => {
+    setLoadingDrivers(true)
     try {
-      const [ordersRes, driversRes] = await Promise.all([getOrders(), getDrivers()])
-      setOrders(ordersRes.data)
-      setDrivers(driversRes.data)
+      const res = await getDrivers()
+      setDrivers(res.data)
       setError(null)
-    } catch (err) {
-      setError('Failed to fetch data. Make sure order-service (5001) and driver-service (5002) are running.')
+    } catch {
+      setError('Failed to load drivers.')
     } finally {
-      setLoading(false)
+      setLoadingDrivers(false)
     }
   }
 
-  useEffect(() => { fetchData() }, [])
+  useEffect(() => { loadDrivers() }, [])
 
-  const metrics = useMemo(() => ({
-    totalOrders: orders.length,
-    assignedOrders: orders.filter((o) => o.status === 'ASSIGNED').length,
-    deliveredOrders: orders.filter((o) => o.status === 'DELIVERED').length,
-    totalDrivers: drivers.length,
-    availableDrivers: drivers.filter((d) => d.status === 'AVAILABLE').length,
-  }), [orders, drivers])
-
-  const onOptimize = async () => {
-    setOptimizing(true)
+  const selectDriver = async (driver) => {
+    setSelectedDriver(driver)
+    setAllDelivered(false)
+    setLoadingOrders(true)
     setError(null)
     try {
-      const res = await optimizeRoutes()
-      // Show the message returned by the service
-      const msg = res?.data?.message || 'Done'
-      if (msg !== 'Optimization complete' && msg !== 'Done') {
-        setError(`ℹ️ ${msg}`)
+      const ordersRes = await getDriverOrders(driver.id)
+      setOrders(ordersRes.data)
+    } catch {
+      setOrders([])
+      setError('No assigned orders found for this driver yet.')
+    } finally {
+      setLoadingOrders(false)
+    }
+  }
+
+  // ── FIXED deliver ─────────────────────────────────────────────────────────
+  // Root cause: the backend used db.flush() before counting remaining orders,
+  // but flush doesn't update SQLAlchemy's own session cache — the COUNT query
+  // still saw the order as non-DELIVERED, so `remaining` was always ≥ 1 and
+  // PATCH /drivers/{id}/free was never called. Driver stayed ASSIGNED forever.
+  //
+  // The backend fix (commit before count) is the real solution. This frontend
+  // fix adds:
+  //   1. Always re-fetch orders after delivery so UI matches DB truth.
+  //   2. Show a "All done!" banner when driver_freed=true comes back.
+  //   3. Re-fetch the drivers list so the selector reflects updated status.
+  const deliver = async (orderId) => {
+    setActionLoading(orderId)
+    setError(null)
+    try {
+      const res = await markOrderDelivered(orderId)
+
+      // Re-fetch this driver's orders from the server (source of truth)
+      if (selectedDriver) {
+        const ordersRes = await getDriverOrders(selectedDriver.id)
+        setOrders(ordersRes.data)
       }
-      await fetchData()
-    } catch (err) {
-      const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || 'unknown'
-      setError(`Optimize failed: ${detail}`)
+
+      // Backend now returns { driver_freed: true } when all stops are done
+      if (res?.data?.driver_freed) {
+        setAllDelivered(true)
+        // Refresh drivers list so selector shows AVAILABLE status immediately
+        loadDrivers()
+      }
+    } catch {
+      setError('Failed to mark delivered.')
     } finally {
-      setOptimizing(false)
+      setActionLoading(null)
     }
   }
 
-  const handleOrderFormChange = (e) => {
-    const { name, value } = e.target
-    setOrderFormData((cur) => ({ ...cur, [name]: value }))
-  }
+  const remainingOrders = useMemo(
+    () => orders.filter((order) => order.status !== 'DELIVERED'),
+    [orders]
+  )
 
-  const handleDriverFormChange = (e) => {
-    const { name, value } = e.target
-    setDriverFormData((cur) => ({ ...cur, [name]: value }))
+  if (!selectedDriver) {
+    return (
+      <DriverSelector
+        drivers={drivers}
+        loading={loadingDrivers}
+        onSelect={selectDriver}
+        onBack={() => navigate('/')}
+      />
+    )
   }
-
-  const handleMapClick = ({ lat, lng }) => {
-    const loc = { latitude: lat.toFixed(6), longitude: lng.toFixed(6) }
-    if (activeTab === 'drivers' && showDriverForm) {
-      setDriverFormData((cur) => ({ ...cur, ...loc }))
-    } else if (activeTab === 'orders' && showOrderForm) {
-      setOrderFormData((cur) => ({ ...cur, ...loc }))
-    }
-  }
-
-  const handleCreateOrder = async (e) => {
-    e.preventDefault()
-    setError(null)
-    try {
-      await createOrder({
-        ...orderFormData,
-        latitude: Number(orderFormData.latitude),
-        longitude: Number(orderFormData.longitude),
-      })
-      setOrderFormData({ order_name: '', order_size: '', address: '', latitude: '', longitude: '' })
-      setShowOrderForm(false)
-      await fetchData()
-    } catch (err) {
-      setError('Create order failed: ' + (err?.response?.data?.detail || err?.message))
-    }
-  }
-
-  const handleCreateDriver = async (e) => {
-    e.preventDefault()
-    setError(null)
-    try {
-      await createDriver({
-        ...driverFormData,
-        latitude: Number(driverFormData.latitude),
-        longitude: Number(driverFormData.longitude),
-      })
-      setDriverFormData({ name: '', phone: '', address: '', latitude: '', longitude: '' })
-      setShowDriverForm(false)
-      await fetchData()
-    } catch (err) {
-      setError('Create driver failed: ' + (err?.response?.data?.detail || err?.message))
-    }
-  }
-
-  const selectedLocation =
-    activeTab === 'drivers' && driverFormData.latitude && driverFormData.longitude
-      ? { latitude: Number(driverFormData.latitude), longitude: Number(driverFormData.longitude) }
-      : activeTab === 'orders' && orderFormData.latitude && orderFormData.longitude
-      ? { latitude: Number(orderFormData.latitude), longitude: Number(orderFormData.longitude) }
-      : null
 
   return (
-    <div className="app">
-      <div className="sidebar">
-        <div className="sidebar-header">
-          <h1>EcoRoute Admin</h1>
-          <p>Orders, drivers, and route optimization</p>
+    <div className="driver-view">
+      <div className="driver-header">
+        <div>
+          <h2>{selectedDriver.name}</h2>
+          <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>
+            {selectedDriver.phone} | {remainingOrders.length} pending stop{remainingOrders.length === 1 ? '' : 's'}
+          </span>
         </div>
 
-        <div className="sidebar-nav">
-          <button className={activeTab === 'orders' ? 'active' : ''} onClick={() => setActiveTab('orders')}>
-            Orders
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            className="btn"
+            onClick={() => { setSelectedDriver(null); setOrders([]); setError(null); setAllDelivered(false) }}
+            style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}
+          >
+            Switch Driver
           </button>
-          <button className={activeTab === 'drivers' ? 'active' : ''} onClick={() => setActiveTab('drivers')}>
-            Drivers
+          <button
+            className="btn"
+            onClick={() => navigate('/')}
+            style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}
+          >
+            Home
           </button>
-        </div>
-
-        <div className="sidebar-content">
-          {loading ? (
-            <div className="loading">Loading...</div>
-          ) : activeTab === 'orders' ? (
-            <>
-              <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{orders.length} Orders</span>
-                <button className="btn btn-primary btn-sm" onClick={() => setShowOrderForm((o) => !o)}>
-                  {showOrderForm ? 'Cancel' : '+ New Order'}
-                </button>
-              </div>
-
-              {showOrderForm && (
-                <form className="card" onSubmit={handleCreateOrder}>
-                  <div className="form-group">
-                    <label>Order Name</label>
-                    <input name="order_name" value={orderFormData.order_name} onChange={handleOrderFormChange} required />
-                  </div>
-                  <div className="form-group">
-                    <label>Order Size</label>
-                    <input name="order_size" value={orderFormData.order_size} onChange={handleOrderFormChange} required />
-                  </div>
-                  <div className="form-group">
-                    <label>Address</label>
-                    <input name="address" value={orderFormData.address} onChange={handleOrderFormChange} required />
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <div className="form-group" style={{ flex: 1 }}>
-                      <label>Latitude</label>
-                      <input name="latitude" type="number" step="any" value={orderFormData.latitude} onChange={handleOrderFormChange} required />
-                    </div>
-                    <div className="form-group" style={{ flex: 1 }}>
-                      <label>Longitude</label>
-                      <input name="longitude" type="number" step="any" value={orderFormData.longitude} onChange={handleOrderFormChange} required />
-                    </div>
-                  </div>
-                  <div className="card-meta" style={{ marginBottom: 10 }}>
-                    💡 Click the map to auto-fill coordinates.
-                  </div>
-                  <button className="btn btn-primary" type="submit">Create Order</button>
-                </form>
-              )}
-
-              {orders.map((order) => <OrderCard key={order.id} order={order} />)}
-            </>
-          ) : (
-            <>
-              <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{drivers.length} Drivers</span>
-                <button className="btn btn-primary btn-sm" onClick={() => setShowDriverForm((o) => !o)}>
-                  {showDriverForm ? 'Cancel' : '+ New Driver'}
-                </button>
-              </div>
-
-              {showDriverForm && (
-                <form className="card" onSubmit={handleCreateDriver}>
-                  <div className="form-group">
-                    <label>Driver Name</label>
-                    <input name="name" value={driverFormData.name} onChange={handleDriverFormChange} required />
-                  </div>
-                  <div className="form-group">
-                    <label>Phone</label>
-                    <input name="phone" value={driverFormData.phone} onChange={handleDriverFormChange} required />
-                  </div>
-                  <div className="form-group">
-                    <label>Address</label>
-                    <input name="address" value={driverFormData.address} onChange={handleDriverFormChange} required />
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <div className="form-group" style={{ flex: 1 }}>
-                      <label>Latitude</label>
-                      <input name="latitude" type="number" step="any" value={driverFormData.latitude} onChange={handleDriverFormChange} required />
-                    </div>
-                    <div className="form-group" style={{ flex: 1 }}>
-                      <label>Longitude</label>
-                      <input name="longitude" type="number" step="any" value={driverFormData.longitude} onChange={handleDriverFormChange} required />
-                    </div>
-                  </div>
-                  <div className="card-meta" style={{ marginBottom: 10 }}>
-                    💡 Click the map to auto-fill coordinates.
-                  </div>
-                  <button className="btn btn-primary" type="submit">Create Driver</button>
-                </form>
-              )}
-
-              {drivers.map((driver) => <DriverCard key={driver.id} driver={driver} />)}
-            </>
-          )}
         </div>
       </div>
 
-      <div className="main-area">
-        <div className="toolbar">
+      {/* ── Error banner ─────────────────────────────────────────────────── */}
+      {error && (
+        <div style={{ padding: 12, background: '#fef3c7', color: '#92400e', fontSize: '0.85rem' }}>
+          {error}
+        </div>
+      )}
+
+      {/* ── "All done!" completion banner ────────────────────────────────── */}
+      {allDelivered && (
+        <div style={{
+          padding: '14px 20px',
+          background: '#d1fae5',
+          color: '#065f46',
+          fontSize: '0.95rem',
+          fontWeight: 600,
+          borderTop: '1px solid #6ee7b7',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+        }}>
+          <span style={{ fontSize: '1.4rem' }}>✅</span>
+          All deliveries complete! You are now marked as available.
+        </div>
+      )}
+
+      <div style={{ flex: 1 }}>
+        {loadingOrders ? (
+          <div className="loading">Loading assigned orders...</div>
+        ) : (
+          <MapView orders={orders} drivers={[selectedDriver]} />
+        )}
+      </div>
+
+      {/* ── Next stop action bar (hidden when all done) ───────────────────── */}
+      {remainingOrders.length > 0 && !allDelivered && (
+        <div style={{
+          padding: '12px 20px',
+          background: '#ebf8ff',
+          borderTop: '1px solid #bee3f8',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
           <div>
-            {error && <span style={{ color: '#e53e3e', fontSize: '0.85rem' }}>{error}</span>}
+            <div style={{ fontSize: '0.75rem', color: '#2b6cb0', fontWeight: 600 }}>NEXT STOP</div>
+            <div style={{ fontSize: '0.9rem', fontWeight: 500 }}>{remainingOrders[0].address}</div>
+            <div style={{ fontSize: '0.75rem', color: '#718096' }}>
+              Sequence: {remainingOrders[0].sequence_order ?? 'N/A'}
+              {remainingOrders[0].eta != null && ` | ETA: ${remainingOrders[0].eta} min`}
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button className="btn" onClick={() => navigate('/')} style={{ background: '#edf2f7' }}>
-              Switch Role
-            </button>
-            {/* Added Refresh button so admin can poll without full page reload */}
-            <button className="btn" onClick={fetchData} disabled={loading} style={{ background: '#edf2f7' }}>
-              {loading ? '...' : '↻ Refresh'}
-            </button>
-            <button className="btn btn-primary" onClick={onOptimize} disabled={optimizing || loading}>
-              {optimizing ? 'Optimizing…' : '⚡ Optimize Routes'}
-            </button>
-          </div>
-        </div>
 
-        <div className="map-container">
-          {!loading && (
-            <MapView
-              orders={orders}
-              drivers={drivers}
-              onMapClick={showOrderForm || showDriverForm ? handleMapClick : null}
-              selectedLocation={selectedLocation}
-            />
-          )}
+          <button
+            className="btn btn-success"
+            onClick={() => deliver(remainingOrders[0].id)}
+            disabled={actionLoading === remainingOrders[0].id}
+          >
+            {actionLoading === remainingOrders[0].id ? 'Updating...' : 'Mark Delivered'}
+          </button>
         </div>
+      )}
 
-        <div className="metrics-panel">
-          <div className="metrics-grid">
-            <div className="metric-item">
-              <div className="metric-value">{metrics.totalOrders}</div>
-              <div className="metric-label">Orders</div>
+      {/* ── Stop list ─────────────────────────────────────────────────────── */}
+      <div className="stop-list">
+        <div style={{ fontWeight: 600, marginBottom: 8, fontSize: '0.85rem' }}>Assigned Orders</div>
+        {orders.length === 0 && !loadingOrders && (
+          <div className="card-meta">No assigned orders.</div>
+        )}
+        {orders.map((order, index) => {
+          const isDelivered = order.status === 'DELIVERED'
+          return (
+            <div
+              key={order.id}
+              className={`stop-item ${!isDelivered && remainingOrders[0]?.id === order.id ? 'active' : ''}`}
+              style={{ opacity: isDelivered ? 0.55 : 1 }}
+            >
+              <div className="stop-number">
+                {isDelivered ? '✓' : order.sequence_order ?? index + 1}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{
+                  fontSize: '0.8rem',
+                  fontWeight: 500,
+                  textDecoration: isDelivered ? 'line-through' : 'none',
+                }}>
+                  {order.order_name || `Order #${order.id}`}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#718096' }}>{order.address}</div>
+                {order.eta != null && (
+                  <div style={{ fontSize: '0.7rem', color: '#a0aec0' }}>ETA: {order.eta} min</div>
+                )}
+              </div>
+              <div>
+                {isDelivered ? (
+                  <span className="badge badge-delivered">DELIVERED</span>
+                ) : (
+                  <button
+                    className="btn btn-success btn-sm"
+                    onClick={() => deliver(order.id)}
+                    disabled={actionLoading === order.id}
+                  >
+                    {actionLoading === order.id ? '...' : 'Done'}
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="metric-item">
-              <div className="metric-value">{metrics.assignedOrders}</div>
-              <div className="metric-label">Assigned</div>
-            </div>
-            <div className="metric-item">
-              <div className="metric-value">{metrics.deliveredOrders}</div>
-              <div className="metric-label">Delivered</div>
-            </div>
-            <div className="metric-item">
-              <div className="metric-value">{metrics.totalDrivers}</div>
-              <div className="metric-label">Drivers</div>
-            </div>
-            <div className="metric-item">
-              <div className="metric-value">{metrics.availableDrivers}</div>
-              <div className="metric-label">Available</div>
-            </div>
-          </div>
-        </div>
+          )
+        })}
       </div>
     </div>
   )
 }
 
-export default AdminDashboard
+export default DriverView
