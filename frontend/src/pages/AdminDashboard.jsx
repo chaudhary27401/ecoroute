@@ -8,12 +8,15 @@ function OrderCard({ order }) {
     <div className="card">
       <div className="card-title">{order.order_name || `Order #${order.id}`}</div>
       <div className="card-meta">{order.address}</div>
-      <div className="card-meta" style={{ marginTop: 6 }}>
-        Size: {order.order_size || 'N/A'}
+      <div className="card-meta" style={{ marginTop: 4 }}>
+        Size: {order.order_size || 'N/A'} &nbsp;|&nbsp; Driver: {order.driver_id ?? 'Unassigned'}
       </div>
-      <div className="card-meta" style={{ marginTop: 6 }}>
-        Driver: {order.driver_id ?? 'Unassigned'}
-      </div>
+      {/* BUG FIX: show ETA if available */}
+      {order.eta != null && (
+        <div className="card-meta" style={{ marginTop: 4 }}>
+          ETA: <strong>{order.eta} min</strong> &nbsp;|&nbsp; Stop #{order.sequence_order}
+        </div>
+      )}
       <div style={{ marginTop: 8 }}>
         <span className={`badge badge-${String(order.status || '').toLowerCase()}`}>
           {order.status || 'UNKNOWN'}
@@ -28,7 +31,7 @@ function DriverCard({ driver }) {
     <div className="card">
       <div className="card-title">{driver.name}</div>
       <div className="card-meta">{driver.phone}</div>
-      <div className="card-meta" style={{ marginTop: 6 }}>
+      <div className="card-meta" style={{ marginTop: 4 }}>
         Address: {driver.address || 'N/A'}
       </div>
       <div style={{ marginTop: 8 }}>
@@ -51,18 +54,10 @@ function AdminDashboard() {
   const [showOrderForm, setShowOrderForm] = useState(false)
   const [showDriverForm, setShowDriverForm] = useState(false)
   const [orderFormData, setOrderFormData] = useState({
-    order_name: '',
-    order_size: '',
-    address: '',
-    latitude: '',
-    longitude: '',
+    order_name: '', order_size: '', address: '', latitude: '', longitude: '',
   })
   const [driverFormData, setDriverFormData] = useState({
-    name: '',
-    phone: '',
-    address: '',
-    latitude: '',
-    longitude: '',
+    name: '', phone: '', address: '', latitude: '', longitude: '',
   })
 
   const fetchData = async () => {
@@ -73,116 +68,100 @@ function AdminDashboard() {
       setDrivers(driversRes.data)
       setError(null)
     } catch (err) {
-      setError('Failed to fetch data. Start services first and check ports 5001 and 5002.')
+      setError('Failed to fetch data. Make sure order-service (5001) and driver-service (5002) are running.')
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => {
-    fetchData()
-  }, [])
+  useEffect(() => { fetchData() }, [])
 
-  const metrics = useMemo(() => {
-    const assignedOrders = orders.filter((order) => order.status === 'ASSIGNED').length
-    const deliveredOrders = orders.filter((order) => order.status === 'DELIVERED').length
-    const availableDrivers = drivers.filter((driver) => driver.status === 'AVAILABLE').length
-
-    return {
-      totalOrders: orders.length,
-      assignedOrders,
-      deliveredOrders,
-      totalDrivers: drivers.length,
-      availableDrivers,
-    }
-  }, [drivers, orders])
+  const metrics = useMemo(() => ({
+    totalOrders: orders.length,
+    assignedOrders: orders.filter((o) => o.status === 'ASSIGNED').length,
+    deliveredOrders: orders.filter((o) => o.status === 'DELIVERED').length,
+    totalDrivers: drivers.length,
+    availableDrivers: drivers.filter((d) => d.status === 'AVAILABLE').length,
+  }), [orders, drivers])
 
   const onOptimize = async () => {
     setOptimizing(true)
     setError(null)
     try {
-      await optimizeRoutes()
+      const res = await optimizeRoutes()
+      // Show the message returned by the service
+      const msg = res?.data?.message || 'Done'
+      if (msg !== 'Optimization complete' && msg !== 'Done') {
+        setError(`ℹ️ ${msg}`)
+      }
       await fetchData()
     } catch (err) {
-      setError('Optimize failed: ' + (err?.response?.data?.error || err?.message || 'unknown'))
+      const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || 'unknown'
+      setError(`Optimize failed: ${detail}`)
     } finally {
       setOptimizing(false)
     }
   }
 
-  const handleOrderFormChange = (event) => {
-    const { name, value } = event.target
-    setOrderFormData((current) => ({ ...current, [name]: value }))
+  const handleOrderFormChange = (e) => {
+    const { name, value } = e.target
+    setOrderFormData((cur) => ({ ...cur, [name]: value }))
   }
 
-  const handleDriverFormChange = (event) => {
-    const { name, value } = event.target
-    setDriverFormData((current) => ({ ...current, [name]: value }))
+  const handleDriverFormChange = (e) => {
+    const { name, value } = e.target
+    setDriverFormData((cur) => ({ ...cur, [name]: value }))
   }
 
   const handleMapClick = ({ lat, lng }) => {
-    const locationUpdate = {
-      latitude: lat.toFixed(6),
-      longitude: lng.toFixed(6),
-    }
-
+    const loc = { latitude: lat.toFixed(6), longitude: lng.toFixed(6) }
     if (activeTab === 'drivers' && showDriverForm) {
-      setDriverFormData((current) => ({ ...current, ...locationUpdate }))
-      return
-    }
-
-    if (activeTab === 'orders' && showOrderForm) {
-      setOrderFormData((current) => ({ ...current, ...locationUpdate }))
+      setDriverFormData((cur) => ({ ...cur, ...loc }))
+    } else if (activeTab === 'orders' && showOrderForm) {
+      setOrderFormData((cur) => ({ ...cur, ...loc }))
     }
   }
 
-  const handleCreateOrder = async (event) => {
-    event.preventDefault()
+  const handleCreateOrder = async (e) => {
+    e.preventDefault()
     setError(null)
-
     try {
       await createOrder({
         ...orderFormData,
         latitude: Number(orderFormData.latitude),
         longitude: Number(orderFormData.longitude),
       })
-      setOrderFormData({
-        order_name: '',
-        order_size: '',
-        address: '',
-        latitude: '',
-        longitude: '',
-      })
+      setOrderFormData({ order_name: '', order_size: '', address: '', latitude: '', longitude: '' })
       setShowOrderForm(false)
       await fetchData()
     } catch (err) {
-      setError('Create order failed: ' + (err?.response?.data?.error || err?.message || 'unknown'))
+      setError('Create order failed: ' + (err?.response?.data?.detail || err?.message))
     }
   }
 
-  const handleCreateDriver = async (event) => {
-    event.preventDefault()
+  const handleCreateDriver = async (e) => {
+    e.preventDefault()
     setError(null)
-
     try {
       await createDriver({
         ...driverFormData,
         latitude: Number(driverFormData.latitude),
         longitude: Number(driverFormData.longitude),
       })
-      setDriverFormData({
-        name: '',
-        phone: '',
-        address: '',
-        latitude: '',
-        longitude: '',
-      })
+      setDriverFormData({ name: '', phone: '', address: '', latitude: '', longitude: '' })
       setShowDriverForm(false)
       await fetchData()
     } catch (err) {
-      setError('Create driver failed: ' + (err?.response?.data?.error || err?.message || 'unknown'))
+      setError('Create driver failed: ' + (err?.response?.data?.detail || err?.message))
     }
   }
+
+  const selectedLocation =
+    activeTab === 'drivers' && driverFormData.latitude && driverFormData.longitude
+      ? { latitude: Number(driverFormData.latitude), longitude: Number(driverFormData.longitude) }
+      : activeTab === 'orders' && orderFormData.latitude && orderFormData.longitude
+      ? { latitude: Number(orderFormData.latitude), longitude: Number(orderFormData.longitude) }
+      : null
 
   return (
     <div className="app">
@@ -193,16 +172,10 @@ function AdminDashboard() {
         </div>
 
         <div className="sidebar-nav">
-          <button
-            className={activeTab === 'orders' ? 'active' : ''}
-            onClick={() => setActiveTab('orders')}
-          >
+          <button className={activeTab === 'orders' ? 'active' : ''} onClick={() => setActiveTab('orders')}>
             Orders
           </button>
-          <button
-            className={activeTab === 'drivers' ? 'active' : ''}
-            onClick={() => setActiveTab('drivers')}
-          >
+          <button className={activeTab === 'drivers' ? 'active' : ''} onClick={() => setActiveTab('drivers')}>
             Drivers
           </button>
         </div>
@@ -214,7 +187,7 @@ function AdminDashboard() {
             <>
               <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{orders.length} Orders</span>
-                <button className="btn btn-primary btn-sm" onClick={() => setShowOrderForm((open) => !open)}>
+                <button className="btn btn-primary btn-sm" onClick={() => setShowOrderForm((o) => !o)}>
                   {showOrderForm ? 'Cancel' : '+ New Order'}
                 </button>
               </div>
@@ -222,41 +195,41 @@ function AdminDashboard() {
               {showOrderForm && (
                 <form className="card" onSubmit={handleCreateOrder}>
                   <div className="form-group">
-                    <label htmlFor="order_name">Order Name</label>
-                    <input id="order_name" name="order_name" value={orderFormData.order_name} onChange={handleOrderFormChange} required />
+                    <label>Order Name</label>
+                    <input name="order_name" value={orderFormData.order_name} onChange={handleOrderFormChange} required />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="order_size">Order Size</label>
-                    <input id="order_size" name="order_size" value={orderFormData.order_size} onChange={handleOrderFormChange} required />
+                    <label>Order Size</label>
+                    <input name="order_size" value={orderFormData.order_size} onChange={handleOrderFormChange} required />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="address">Address</label>
-                    <input id="address" name="address" value={orderFormData.address} onChange={handleOrderFormChange} required />
+                    <label>Address</label>
+                    <input name="address" value={orderFormData.address} onChange={handleOrderFormChange} required />
                   </div>
-                  <div className="form-group">
-                    <label htmlFor="latitude">Latitude</label>
-                    <input id="latitude" name="latitude" type="number" step="any" value={orderFormData.latitude} onChange={handleOrderFormChange} required />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div className="form-group" style={{ flex: 1 }}>
+                      <label>Latitude</label>
+                      <input name="latitude" type="number" step="any" value={orderFormData.latitude} onChange={handleOrderFormChange} required />
+                    </div>
+                    <div className="form-group" style={{ flex: 1 }}>
+                      <label>Longitude</label>
+                      <input name="longitude" type="number" step="any" value={orderFormData.longitude} onChange={handleOrderFormChange} required />
+                    </div>
                   </div>
-                  <div className="form-group">
-                    <label htmlFor="longitude">Longitude</label>
-                    <input id="longitude" name="longitude" type="number" step="any" value={orderFormData.longitude} onChange={handleOrderFormChange} required />
-                  </div>
-                  <div className="card-meta" style={{ marginBottom: 12 }}>
-                    Tip: click on the map to auto-fill latitude and longitude.
+                  <div className="card-meta" style={{ marginBottom: 10 }}>
+                    💡 Click the map to auto-fill coordinates.
                   </div>
                   <button className="btn btn-primary" type="submit">Create Order</button>
                 </form>
               )}
 
-              {orders.map((order) => (
-                <OrderCard key={order.id} order={order} />
-              ))}
+              {orders.map((order) => <OrderCard key={order.id} order={order} />)}
             </>
           ) : (
             <>
               <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{drivers.length} Drivers</span>
-                <button className="btn btn-primary btn-sm" onClick={() => setShowDriverForm((open) => !open)}>
+                <button className="btn btn-primary btn-sm" onClick={() => setShowDriverForm((o) => !o)}>
                   {showDriverForm ? 'Cancel' : '+ New Driver'}
                 </button>
               </div>
@@ -264,27 +237,29 @@ function AdminDashboard() {
               {showDriverForm && (
                 <form className="card" onSubmit={handleCreateDriver}>
                   <div className="form-group">
-                    <label htmlFor="driver_name">Driver Name</label>
-                    <input id="driver_name" name="name" value={driverFormData.name} onChange={handleDriverFormChange} required />
+                    <label>Driver Name</label>
+                    <input name="name" value={driverFormData.name} onChange={handleDriverFormChange} required />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="driver_phone">Phone</label>
-                    <input id="driver_phone" name="phone" value={driverFormData.phone} onChange={handleDriverFormChange} required />
+                    <label>Phone</label>
+                    <input name="phone" value={driverFormData.phone} onChange={handleDriverFormChange} required />
                   </div>
                   <div className="form-group">
-                    <label htmlFor="driver_address">Address</label>
-                    <input id="driver_address" name="address" value={driverFormData.address} onChange={handleDriverFormChange} required />
+                    <label>Address</label>
+                    <input name="address" value={driverFormData.address} onChange={handleDriverFormChange} required />
                   </div>
-                  <div className="form-group">
-                    <label htmlFor="driver_latitude">Latitude</label>
-                    <input id="driver_latitude" name="latitude" type="number" step="any" value={driverFormData.latitude} onChange={handleDriverFormChange} required />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div className="form-group" style={{ flex: 1 }}>
+                      <label>Latitude</label>
+                      <input name="latitude" type="number" step="any" value={driverFormData.latitude} onChange={handleDriverFormChange} required />
+                    </div>
+                    <div className="form-group" style={{ flex: 1 }}>
+                      <label>Longitude</label>
+                      <input name="longitude" type="number" step="any" value={driverFormData.longitude} onChange={handleDriverFormChange} required />
+                    </div>
                   </div>
-                  <div className="form-group">
-                    <label htmlFor="driver_longitude">Longitude</label>
-                    <input id="driver_longitude" name="longitude" type="number" step="any" value={driverFormData.longitude} onChange={handleDriverFormChange} required />
-                  </div>
-                  <div className="card-meta" style={{ marginBottom: 12 }}>
-                    Tip: click on the map to auto-fill driver latitude and longitude.
+                  <div className="card-meta" style={{ marginBottom: 10 }}>
+                    💡 Click the map to auto-fill coordinates.
                   </div>
                   <button className="btn btn-primary" type="submit">Create Driver</button>
                 </form>
@@ -305,8 +280,12 @@ function AdminDashboard() {
             <button className="btn" onClick={() => navigate('/')} style={{ background: '#edf2f7' }}>
               Switch Role
             </button>
-            <button className="btn btn-primary" onClick={onOptimize} disabled={optimizing}>
-              {optimizing ? 'Optimizing...' : 'Optimize Routes'}
+            {/* Added Refresh button so admin can poll without full page reload */}
+            <button className="btn" onClick={fetchData} disabled={loading} style={{ background: '#edf2f7' }}>
+              {loading ? '...' : '↻ Refresh'}
+            </button>
+            <button className="btn btn-primary" onClick={onOptimize} disabled={optimizing || loading}>
+              {optimizing ? 'Optimizing…' : '⚡ Optimize Routes'}
             </button>
           </div>
         </div>
@@ -317,21 +296,7 @@ function AdminDashboard() {
               orders={orders}
               drivers={drivers}
               onMapClick={showOrderForm || showDriverForm ? handleMapClick : null}
-              selectedLocation={
-                activeTab === 'drivers'
-                  ? driverFormData.latitude && driverFormData.longitude
-                    ? {
-                        latitude: Number(driverFormData.latitude),
-                        longitude: Number(driverFormData.longitude),
-                      }
-                    : null
-                  : orderFormData.latitude && orderFormData.longitude
-                  ? {
-                      latitude: Number(orderFormData.latitude),
-                      longitude: Number(orderFormData.longitude),
-                    }
-                  : null
-              }
+              selectedLocation={selectedLocation}
             />
           )}
         </div>
