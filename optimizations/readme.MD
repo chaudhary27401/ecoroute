@@ -272,6 +272,29 @@ The backend service can then return this data via its API.
 
 ---
 
+# Optimizer HTTP Service (FastAPI)
+
+You can run a dedicated optimizer endpoint from `optimizations/optimizer_api.py`:
+
+```powershell
+cd d:\ecoroute\optimizations
+pip install fastapi uvicorn
+uvicorn optimizer_api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Endpoints:
+
+- `GET /health` → status check
+- `POST /optimize` → payload `{ "orders": [ {"id": 1, "location": [lat, lon] }, ...], "num_drivers": 2 }`
+
+Integrate from order service in `services/order-service/routers/order.py` (`/orders/optimize`) by calling:
+
+```python
+requests.post('http://localhost:8000/optimize', json={...})
+```
+
+---
+
 # External Dependencies
 
 Required libraries:
