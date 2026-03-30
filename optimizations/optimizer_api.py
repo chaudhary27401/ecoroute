@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Dict
 
@@ -9,7 +10,14 @@ from eta import calculate_eta
 
 class OrderItem(BaseModel):
     id: int
-    location: List[float] = Field(..., min_items=2, max_items=2)
+    location: List[float] = Field(..., min_length=2, max_length=2)
+
+    # Pydantic v1 / v2 compatibility
+    def to_dict(self):
+        try:
+            return self.model_dump()   # pydantic v2
+        except AttributeError:
+            return self.dict()         # pydantic v1
 
 
 class OptimizeRequest(BaseModel):
@@ -17,26 +25,32 @@ class OptimizeRequest(BaseModel):
     num_drivers: int
 
 
-app = FastAPI(title="EcoRoute Optimizer", version="1.0")
+app = FastAPI(title="EcoRoute Optimizer", version="1.1")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok", "service": "optimizer"}
+    return {"status": "ok", "service": "optimizer", "version": "1.1"}
 
 
 @app.post("/optimize")
 def optimize(request: OptimizeRequest):
     if not request.orders:
         raise HTTPException(status_code=400, detail="orders list cannot be empty")
-
     if request.num_drivers < 1:
         raise HTTPException(status_code=400, detail="num_drivers must be at least 1")
 
-    # Prevent requested drivers from exceeding available orders
     num_drivers = min(request.num_drivers, len(request.orders))
 
-    raw_orders = [order.dict() for order in request.orders]
+    # BUG FIX 6: Use compatibility shim instead of bare .dict()
+    raw_orders = [o.to_dict() for o in request.orders]
 
     try:
         clusters = cluster_orders(raw_orders, num_drivers)
@@ -44,17 +58,20 @@ def optimize(request: OptimizeRequest):
         raise HTTPException(status_code=500, detail=f"clustering failed: {exc}")
 
     optimized = {}
-    for driver_id, cluster_orders_list in clusters.items():
+    for driver_id, driver_orders_list in clusters.items():
         try:
-            route = optimization_using_or(cluster_orders_list)
+            route = optimization_using_or(driver_orders_list)
             eta = calculate_eta(route)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"optimization failed for driver {driver_id}: {exc}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"optimization failed for driver {driver_id}: {exc}",
+            )
 
         optimized[str(driver_id)] = {
-            "orders": cluster_orders_list,
+            "orders": driver_orders_list,
             "route": route,
-            "eta": eta
+            "eta": eta,
         }
 
     return optimized
