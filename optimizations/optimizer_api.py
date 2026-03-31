@@ -52,6 +52,20 @@ def optimize(request: OptimizeRequest):
     # BUG FIX 6: Use compatibility shim instead of bare .dict()
     raw_orders = [o.to_dict() for o in request.orders]
 
+    # Validate order locations early before clustering and calls to OSRM.
+    for order in raw_orders:
+        if 'location' not in order or not isinstance(order['location'], list) or len(order['location']) != 2:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid order location format for order {order.get('id')}: {order.get('location')}",
+            )
+        lat, lon = order['location']
+        if not (isinstance(lat, (int, float)) and isinstance(lon, (int, float))):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid order location values for order {order.get('id')}: {order.get('location')}",
+            )
+
     try:
         clusters = cluster_orders(raw_orders, num_drivers)
     except Exception as exc:
@@ -62,6 +76,11 @@ def optimize(request: OptimizeRequest):
         try:
             route = optimization_using_or(driver_orders_list)
             eta = calculate_eta(route)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"optimization failed for driver {driver_id}: {exc}",
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=500,

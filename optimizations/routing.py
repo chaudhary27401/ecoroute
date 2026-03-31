@@ -5,9 +5,34 @@ import openrouteservice
 
 API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImFlZWZkYTljNDllMzRlNDlhOGIxNWYwZGZjYzk0OGQ5IiwiaCI6Im11cm11cjY0In0="
 
+def normalize_location(point):
+    """Accept [lat, lon] or [lon, lat] and normalize to (lon, lat)."""
+    if not isinstance(point, (list, tuple)) or len(point) != 2:
+        raise ValueError(f"Invalid location point format: {point}")
+
+    a, b = point
+    if not (isinstance(a, (int, float)) and isinstance(b, (int, float))):
+        raise ValueError(f"Location coordinates must be numeric: {point}")
+
+    # Latitude range -90 to 90; longitude range -180 to 180.
+    if -90 <= a <= 90 and -180 <= b <= 180:
+        # input was [lat, lon]
+        return (b, a)
+    if -180 <= a <= 180 and -90 <= b <= 90:
+        # input was [lon, lat]
+        return (a, b)
+
+    raise ValueError(f"Location coordinates out of bounds: {point}")
+
+
 def ors_matrix(locations):
     client = openrouteservice.Client(key=API_KEY)
-    coordinates = [(lon, lat) for lat, lon in locations]
+
+    if not isinstance(locations, list) or len(locations) < 2:
+        raise ValueError("locations must be a list of 2 or more points")
+
+    coordinates = [normalize_location(point) for point in locations]
+
     matrix = client.distance_matrix(
         locations=coordinates,
         profile='driving-car',
@@ -35,6 +60,19 @@ def create_distance_matrix(locations):
 
 
 def optimization_using_or(cluster_orders):
+    if not isinstance(cluster_orders, list):
+        raise ValueError("cluster_orders must be a list")
+
+    if len(cluster_orders) == 0:
+        return []
+
+    if len(cluster_orders) == 1:
+        only = cluster_orders[0]
+        return [{
+            "stop": 1,
+            "order_id": only.get("id"),
+            "location": only.get("location"),
+        }]
 
     locations = [o["location"] for o in cluster_orders]
 
