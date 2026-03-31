@@ -4,9 +4,36 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 import models, schemas
 import requests  # used to call ML service
+import json
 
 # Create router
 router = APIRouter(prefix="/orders", tags=["Orders"])
+
+OSRM_BASE_URL = "https://router.project-osrm.org/route/v1/driving"
+
+
+def get_osrm_route_geometry(locations):
+    # locations: [[lat,lon], ...]
+    if not locations or len(locations) < 2:
+        return None
+
+    coordinates = ";".join([f"{lon},{lat}" for [lat, lon] in locations])
+    try:
+        response = requests.get(
+            f"{OSRM_BASE_URL}/{coordinates}?overview=simplified&geometries=geojson&steps=false&annotations=false",
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        geo = data.get("routes", [{}])[0].get("geometry", {}).get("coordinates", [])
+
+        if isinstance(geo, list) and len(geo) > 1:
+            # OSRM returns [lon, lat]
+            return [[lat, lon] for [lon, lat] in geo]
+    except Exception:
+        pass
+
+    return None
 
 
 # Dependency → get DB session
@@ -97,30 +124,110 @@ def optimize(db: Session = Depends(get_db)):
     driver_ids = [d["id"] for d in drivers]
 
     # Step 5: Assign clusters to drivers
-    for idx, (cluster_id, data) in enumerate(result.items()):
+    # ML returns clusters as a dict keyed by cluster_id. Sort keys so cluster->driver
+    # mapping is stable (and not based on dict insertion order).
+    clusters = list(result.items())
+
+    def sort_key(item):
+        k = item[0]
+        try:
+            return int(k)
+        except Exception:
+            return str(k)
+
+    clusters.sort(key=sort_key)
+
+    route_geometries = {}
+
+    for idx, (cluster_id, data) in enumerate(clusters):
+        if idx >= len(driver_ids):
+            break
 
         driver_id = driver_ids[idx]
+        driver_info = next((d for d in drivers if d.get("id") == driver_id), None)
 
-        # 🔥 Mark driver as assigned
-        requests.patch(f"http://localhost:5002/drivers/{driver_id}/assign")
+        # Defensive parsing: optimizer response value should be a dict, but
+        # in some runs it may arrive as a JSON string.
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except Exception:
+                data = {}
 
-        route = data["route"]
-        etas = data["eta"]
+        if not isinstance(data, dict):
+            data = {}
+
+        route = data.get("route") or []
+        etas = data.get("eta") or []
+
+        if isinstance(route, str):
+            try:
+                route = json.loads(route)
+            except Exception:
+                route = []
+
+        if isinstance(etas, str):
+            try:
+                etas = json.loads(etas)
+            except Exception:
+                etas = []
+
+        if not isinstance(route, list):
+            route = []
+        if not isinstance(etas, list):
+            etas = []
+
+        # Build points sequence for route geometry (driver current position first).
+        route_positions = []
+        if driver_info and isinstance(driver_info.get("latitude"), (int, float)) and isinstance(driver_info.get("longitude"), (int, float)):
+            route_positions.append([driver_info["latitude"], driver_info["longitude"]])
+
+        for stop in route:
+            if isinstance(stop, dict):
+                loc = stop.get("location")
+                if isinstance(loc, list) and len(loc) == 2:
+                    route_positions.append([loc[0], loc[1]])
+
+        if len(route_positions) > 1:
+            osrm_geometry = get_osrm_route_geometry(route_positions)
+            route_geometries[str(driver_id)] = osrm_geometry or route_positions
+            route_geometries[driver_id] = route_geometries[str(driver_id)]
+
+        # Only mark driver as assigned if this cluster assigned at least one order.
+        assigned_any = False
 
         for r, e in zip(route, etas):
+            const_r = r if isinstance(r, dict) else {}
+            const_e = e if isinstance(e, dict) else {}
 
-            order = db.query(models.Order).filter(models.Order.id == r["order_id"]).first()
+            order_id = const_r.get("order_id")
+            if order_id is None:
+                continue
 
-            if order:
-                order.driver_id = driver_id
+            order = db.query(models.Order).filter(models.Order.id == order_id).first()
+            if not order:
+                continue
+
+            order.driver_id = driver_id
+            try:
                 order.cluster_id = int(cluster_id)
-                order.sequence_order = r["stop"]
-                order.eta = e["minutes_left"]
-                order.status = "ASSIGNED"
+            except Exception:
+                order.cluster_id = None
+
+            order.sequence_order = const_r.get("stop")
+            order.eta = const_e.get("minutes_left")
+            order.status = "ASSIGNED"
+            assigned_any = True
+
+        if assigned_any:
+            requests.patch(f"http://localhost:5002/drivers/{driver_id}/assign")
 
     db.commit()
 
-    return {"message": "Optimization complete"}
+    return {
+        "message": "Optimization complete",
+        "geometries": route_geometries,
+    }
 
 
 

@@ -40,19 +40,19 @@ const isValidCoordinate = (lat, lon) =>
   Math.abs(lon) <= 180
 
 function MapView({
-  orders = [],
-  drivers = [],
+  orders,
+  drivers,
   onMapClick = null,
   selectedLocation = null,
-  geometries = {},
-  routeGeometries = {},
+  geometries,
+  routeGeometries,
   enableOsrmRoutes = true,
 }) {
   const [computedGeometries, setComputedGeometries] = useState({})
   const computedRouteCacheRef = useRef({})
   const sortedOrders = useMemo(
     () =>
-      [...orders].sort((a, b) => {
+      [...(orders ?? [])].sort((a, b) => {
         const aSequence = a.sequence_order ?? Number.MAX_SAFE_INTEGER
         const bSequence = b.sequence_order ?? Number.MAX_SAFE_INTEGER
         return aSequence - bSequence
@@ -80,12 +80,12 @@ function MapView({
       if (!enableOsrmRoutes) {
         // Keep the UI responsive while users are editing/creating orders.
         // Polyline will fall back to straight-line points if no backend geometries exist.
-        setComputedGeometries({})
+        setComputedGeometries((cur) => (cur && Object.keys(cur).length ? {} : cur))
         return
       }
 
       const entries = []
-      const driversToProcess = drivers.filter((driver) => isValidCoordinate(driver.latitude, driver.longitude))
+      const driversToProcess = (drivers ?? []).filter((driver) => isValidCoordinate(driver.latitude, driver.longitude))
 
       for (const driver of driversToProcess) {
         const driverOrders = sortedOrders.filter(
@@ -228,7 +228,7 @@ function MapView({
           )
         })}
 
-      {drivers
+      {(drivers ?? [])
         .filter((driver) => isValidCoordinate(driver.latitude, driver.longitude))
         .map((driver) => (
           <Marker key={driver.id} position={[driver.latitude, driver.longitude]} icon={driverIcon}>
@@ -242,7 +242,7 @@ function MapView({
           </Marker>
         ))}
 
-      {drivers
+      {(drivers ?? [])
         .filter((driver) => isValidCoordinate(driver.latitude, driver.longitude))
         .map((driver) => {
           const driverOrders = sortedOrders.filter(
