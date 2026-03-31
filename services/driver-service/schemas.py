@@ -6,3 +6,10 @@ class DriverCreate(BaseModel):
     address: str
     latitude: float
     longitude: float
+    
+    
+# Used by PATCH /{driver_id}/location
+class DriverLocation(BaseModel):
+    latitude: float
+    longitude: float
+     

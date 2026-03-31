@@ -65,3 +65,17 @@ def free_driver(driver_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(driver)
     return driver
+
+# ── UPDATE DRIVER LOCATION ────────────────────────────────────────────────────
+# Called by order-service internally (after deliver) AND optionally by the
+# frontend for live GPS tracking. Keeps driver pin on the map accurate.
+@router.patch("/{driver_id}/location")
+def update_location(driver_id: int, body: schemas.DriverLocation, db: Session = Depends(get_db)):
+    driver = db.query(models.Driver).filter(models.Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    driver.latitude  = body.latitude
+    driver.longitude = body.longitude
+    db.commit()
+    db.refresh(driver)
+    return driver
