@@ -51,6 +51,7 @@ function AdminDashboard() {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [optimizing, setOptimizing] = useState(false)
+  const [geometries, setGeometries] = useState({})  // driver_id → [[lat,lon],...]
   const [showOrderForm, setShowOrderForm] = useState(false)
   const [showDriverForm, setShowDriverForm] = useState(false)
   const [orderFormData, setOrderFormData] = useState({
@@ -89,11 +90,18 @@ function AdminDashboard() {
     setError(null)
     try {
       const res = await optimizeRoutes()
-      // Show the message returned by the service
       const msg = res?.data?.message || 'Done'
       if (msg !== 'Optimization complete' && msg !== 'Done') {
         setError(`ℹ️ ${msg}`)
       }
+      // Extract road geometries keyed by real driver ID.
+      // The optimizer returns clusters by cluster-index (0, 1, 2…) but
+      // order.py maps them to real driver IDs. We store both to handle either.
+      const geoMap = {}
+      if (res?.data?.geometries) {
+        Object.assign(geoMap, res.data.geometries)
+      }
+      setGeometries(geoMap)
       await fetchData()
     } catch (err) {
       const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || 'unknown'
@@ -160,8 +168,8 @@ function AdminDashboard() {
     activeTab === 'drivers' && driverFormData.latitude && driverFormData.longitude
       ? { latitude: Number(driverFormData.latitude), longitude: Number(driverFormData.longitude) }
       : activeTab === 'orders' && orderFormData.latitude && orderFormData.longitude
-      ? { latitude: Number(orderFormData.latitude), longitude: Number(orderFormData.longitude) }
-      : null
+        ? { latitude: Number(orderFormData.latitude), longitude: Number(orderFormData.longitude) }
+        : null
 
   return (
     <div className="app">
@@ -297,6 +305,7 @@ function AdminDashboard() {
               drivers={drivers}
               onMapClick={showOrderForm || showDriverForm ? handleMapClick : null}
               selectedLocation={selectedLocation}
+              geometries={geometries}
             />
           )}
         </div>

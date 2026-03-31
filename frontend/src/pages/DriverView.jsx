@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import MapView from '../components/Map/MapView'
-import { getDriverOrders, getDrivers, markOrderDelivered } from '../api/client'
+import { getDriverOrders, getDriverRouteGeometry, getDrivers, markOrderDelivered } from '../api/client'
 
 function DriverSelector({ drivers, loading, onSelect, onBack }) {
   return (
@@ -44,6 +44,7 @@ function DriverView() {
   const [loadingOrders, setLoadingOrders] = useState(false)
   const [actionLoading, setActionLoading] = useState(null)
   const [error, setError] = useState(null)
+  const [routeGeometries, setRouteGeometries] = useState({})
   // ── NEW: track when driver has finished all stops ─────────────────────────
   const [allDelivered, setAllDelivered] = useState(false)
 
@@ -77,6 +78,29 @@ function DriverView() {
       setLoadingOrders(false)
     }
   }
+
+  useEffect(() => {
+    const loadRoute = async () => {
+      if (!selectedDriver) {
+        return
+      }
+
+      try {
+        const routeRes = await getDriverRouteGeometry(selectedDriver.id)
+        setRouteGeometries((current) => ({
+          ...current,
+          [selectedDriver.id]: routeRes.data?.geometry || [],
+        }))
+      } catch {
+        setRouteGeometries((current) => ({
+          ...current,
+          [selectedDriver.id]: [],
+        }))
+      }
+    }
+
+    loadRoute()
+  }, [selectedDriver, orders])
 
   // ── FIXED deliver ─────────────────────────────────────────────────────────
   // Root cause: the backend used db.flush() before counting remaining orders,
@@ -143,7 +167,7 @@ function DriverView() {
         <div style={{ display: 'flex', gap: 10 }}>
           <button
             className="btn"
-            onClick={() => { setSelectedDriver(null); setOrders([]); setError(null); setAllDelivered(false) }}
+            onClick={() => { setSelectedDriver(null); setOrders([]); setError(null); setAllDelivered(false); setRouteGeometries({}) }}
             style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}
           >
             Switch Driver
@@ -187,7 +211,7 @@ function DriverView() {
         {loadingOrders ? (
           <div className="loading">Loading assigned orders...</div>
         ) : (
-          <MapView orders={orders} drivers={[selectedDriver]} />
+          <MapView orders={orders} drivers={[selectedDriver]} routeGeometries={routeGeometries} />
         )}
       </div>
 
