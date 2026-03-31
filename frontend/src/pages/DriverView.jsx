@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import MapView from '../components/Map/MapView'
-import { getDriverOrders, getDriverRouteGeometry, getDrivers, markOrderDelivered } from '../api/client'
+import { getDriverOrders, getDrivers, markOrderDelivered } from '../api/client'
 
 function DriverSelector({ drivers, loading, onSelect, onBack }) {
   return (
@@ -79,28 +79,8 @@ function DriverView() {
     }
   }
 
-  useEffect(() => {
-    const loadRoute = async () => {
-      if (!selectedDriver) {
-        return
-      }
-
-      try {
-        const routeRes = await getDriverRouteGeometry(selectedDriver.id)
-        setRouteGeometries((current) => ({
-          ...current,
-          [selectedDriver.id]: routeRes.data?.geometry || [],
-        }))
-      } catch {
-        setRouteGeometries((current) => ({
-          ...current,
-          [selectedDriver.id]: [],
-        }))
-      }
-    }
-
-    loadRoute()
-  }, [selectedDriver, orders])
+  // Route geometry is computed inside `MapView` (OSRM fallback),
+  // so we don't need to call any backend "route-geometry" endpoint here.
 
   // ── FIXED deliver ─────────────────────────────────────────────────────────
   // Root cause: the backend used db.flush() before counting remaining orders,
@@ -211,7 +191,7 @@ function DriverView() {
         {loadingOrders ? (
           <div className="loading">Loading assigned orders...</div>
         ) : (
-          <MapView orders={orders} drivers={[selectedDriver]} routeGeometries={routeGeometries} />
+          <MapView orders={orders} drivers={[selectedDriver]} routeGeometries={routeGeometries} enableOsrmRoutes />
         )}
       </div>
 
