@@ -16,6 +16,7 @@ export const getOrders = () => ordersApi.get('/')
 export const optimizeRoutes = () => ordersApi.post('/optimize')
 export const getUnassignedOrders = () => ordersApi.get('/unassigned')
 export const getDriverOrders = (driverId) => ordersApi.get(`/driver/${driverId}`)
+export const getDriverRouteGeometry = (driverId) => ordersApi.get(`/driver/${driverId}/route-geometry`)
 export const markOrderDelivered = (orderId) => ordersApi.patch(`/${orderId}/deliver`)
 
 // Drivers
