@@ -23,10 +23,11 @@
 9. [AI / ML Components](#9-ai--ml-components)
 10. [Database Schema](#10-database-schema)
 11. [Frontend Guide](#11-frontend-guide)
-12. [Key Design Decisions](#12-key-design-decisions)
-13. [Known Limitations & Future Work](#13-known-limitations--future-work)
-14. [Team Roles](#14-team-roles)
-15. [Contributing](#15-contributing)
+12. [Docker Deployment & Troubleshooting](#12-docker-deployment--troubleshooting)
+13. [Key Design Decisions](#13-key-design-decisions)
+14. [Known Limitations & Future Work](#14-known-limitations--future-work)
+15. [Team Roles](#15-team-roles)
+16. [Contributing](#16-contributing)
 
 ---
 
@@ -231,11 +232,75 @@ Make sure the following are installed before setup:
 
 ## 6. Setup & Installation
 
-Clone the repository and follow the steps below. All four services must be running simultaneously.
+Clone the repository and follow **one of the two options below**:
 
-### Step 1 — Start PostgreSQL
+### 🐳 Option A: Docker Compose (Recommended — fastest)
 
-**Using Docker (recommended):**
+**Prerequisites:**
+- Docker and Docker Compose installed
+
+**Steps:**
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/ecoroute.git
+cd ecoroute
+```
+
+2. Copy the environment file and update if needed:
+```bash
+cp .env.example .env
+```
+
+3. Build and start all services:
+```bash
+docker-compose up --build
+```
+
+This will start:
+- PostgreSQL database (auto-initialized with schema + seed data)
+- Driver Service (port 5002)
+- Order Service (port 5001)
+- ML Optimizer Service (port 8000)
+- Frontend (port 5173)
+
+4. Verify all services are running:
+```bash
+docker-compose ps
+```
+
+Expected output:
+```
+CONTAINER ID   IMAGE                  STATUS              PORTS
+<id>           ecoroute-postgres      Up (healthy)        5432
+<id>           ecoroute-driver-service Up (healthy)       5002
+<id>           ecoroute-order-service  Up (healthy)       5001
+<id>           ecoroute-optimizer      Up (healthy)       8000
+<id>           ecoroute-frontend       Up                  5173
+```
+
+5. Open [http://localhost:5173](http://localhost:5173) in your browser.
+
+**Stopping services:**
+```bash
+docker-compose down        # Stop all services
+docker-compose down -v     # Stop and remove volumes (including database)
+```
+
+**Viewing logs:**
+```bash
+docker-compose logs -f [service-name]   # e.g., docker-compose logs -f order-service
+```
+
+---
+
+### 🐍 Option B: Manual Setup (For Development/Debugging)
+
+If you prefer local Python environments, follow these steps:
+
+#### Step 1 — Start PostgreSQL
+
+**Using Docker:**
 
 ```powershell
 docker run -d `
@@ -247,9 +312,9 @@ docker run -d `
   postgres:16
 ```
 
-**Using a local PostgreSQL install:**
+**Using local PostgreSQL:**
 
-Create a database named `ecoroute` with user `postgres` and password `postgres`, or update the `DATABASE_URL` in `database.py` for both services.
+Create a database named `ecoroute` with user `postgres` and password `postgres`.
 
 **Initialize the schema:**
 
@@ -260,17 +325,13 @@ Create a database named `ecoroute` with user `postgres` and password `postgres`,
 \i database/seed_data.sql   -- optional: loads sample data
 ```
 
----
-
-### Step 2 — Start Driver Service (port 5002)
+#### Step 2 — Start Driver Service (port 5002)
 
 ```powershell
 cd services/driver-service
 
-# Create and activate virtual environment
 python -m venv env
-env\Scripts\activate          # Windows
-# source env/bin/activate     # Mac/Linux
+env\Scripts\activate
 
 pip install -r requirements.txt
 
@@ -279,9 +340,7 @@ uvicorn main:app --host 0.0.0.0 --port 5002 --reload
 
 Verify: [http://localhost:5002/](http://localhost:5002/) → `{"message": "Driver Service Running 🚀"}`
 
----
-
-### Step 3 — Start Order Service (port 5001)
+#### Step 3 — Start Order Service (port 5001)
 
 ```powershell
 cd services/order-service
@@ -296,11 +355,9 @@ uvicorn main:app --host 0.0.0.0 --port 5001 --reload
 
 Verify: [http://localhost:5001/](http://localhost:5001/) → `{"message": "Order Service Running 🚀"}`
 
----
+#### Step 4 — Start ML Optimizer Service (port 8000)
 
-### Step 4 — Start ML Optimizer Service (port 8000)
-
-> **Important:** Add your OpenRouteService API key to `optimizations/routing.py` and `optimizations/eta.py` before starting.
+> **Important:** Ensure your OpenRouteService API key is set in `optimizations/routing.py`.
 
 ```powershell
 cd optimizations
@@ -314,6 +371,24 @@ uvicorn optimizer_api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Verify: [http://localhost:8000/health](http://localhost:8000/health) → `{"status": "ok", "service": "optimizer"}`
+
+#### Step 5 — Start Frontend (port 5173)
+
+```powershell
+cd frontend
+
+npm install
+
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) in your browser.
+
+---
+
+## 6. Setup & Installation
+
+> **Important:** Ensure your OpenRouteService API key is set in `optimizations/routing.py`.
 
 **Smoke test the full pipeline (no API key needed for clustering):**
 
@@ -337,21 +412,24 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ---
 
-### All Services Checklist
-
-| Service | Port | Health Check URL |
-|---|---|---|
-| Driver Service | 5002 | http://localhost:5002/ |
-| Order Service | 5001 | http://localhost:5001/ |
-| ML Optimizer | 8000 | http://localhost:8000/health |
-| Frontend | 5173 | http://localhost:5173 |
-| PostgreSQL | 5432 | (connect with psql or pgAdmin) |
-
----
-
 ## 7. Environment Configuration
 
-Currently, service URLs and database credentials are hardcoded. For production, replace them with environment variables.
+### Docker Compose Setup (Recommended)
+
+When using `docker-compose`, all services communicate via internal Docker networking:
+
+```yaml
+# Service URLs (within Docker)
+DRIVER_SVC_URL=http://driver-service:5002
+ML_OPTIMIZER_URL=http://optimizer:8000
+DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ecoroute
+```
+
+These are automatically configured in the `docker-compose.yml` file.
+
+### Manual Setup Configuration
+
+When running services locally without Docker:
 
 | Variable | Default | Used In |
 |---|---|---|
@@ -360,7 +438,26 @@ Currently, service URLs and database credentials are hardcoded. For production, 
 | `DRIVER_SVC_URL` | `http://localhost:5002` | `services/order-service/routers/order.py` |
 | `ML_OPTIMIZER_URL` | `http://localhost:8000` | `services/order-service/routers/order.py` |
 
-To override the ML optimizer URL (e.g., if running on a different host), edit the constant at the top of `services/order-service/routers/order.py`.
+To override these values:
+1. Set environment variables before starting each service, or
+2. Edit the constants directly in the respective files.
+
+### OpenRouteService API Key
+
+Get a free API key from [openrouteservice.org](https://openrouteservice.org/):
+
+**For Docker Compose:**
+```bash
+# Edit .env file
+ORS_API_KEY=your_actual_api_key_here
+docker-compose up --build
+```
+
+**For Manual Setup:**
+Edit `optimizations/routing.py` and `optimizations/eta.py`:
+```python
+API_KEY = "your_actual_api_key_here"
+```
 
 ---
 
@@ -730,7 +827,109 @@ Two Axios instances with the base URL `/api/orders` and `/api/drivers`. Vite's d
 
 ---
 
-## 12. Key Design Decisions
+## 12. Docker Deployment & Troubleshooting
+
+### Quick Docker Cheat Sheet
+
+```bash
+# Build and start all services
+docker-compose up --build
+
+# Stop all services
+docker-compose down
+
+# View logs
+docker-compose logs -f [service-name]
+
+# Rebuild a specific service
+docker-compose up --build [service-name]
+
+# Remove volumes (database data)
+docker-compose down -v
+
+# Run a command in a container
+docker-compose exec [service-name] bash
+
+# Check service status
+docker-compose ps
+```
+
+### Troubleshooting Docker Issues
+
+#### Problem: "Connection refused" between services
+
+**Solution:** Ensure services are using the correct hostnames (not localhost):
+- Inside Docker: `http://driver-service:5002` (not `http://localhost:5002`)
+- From host machine: `http://localhost:5002`
+
+#### Problem: Database not initializing
+
+Check logs:
+```bash
+docker-compose logs postgres
+```
+
+Verify the SQL files exist:
+```bash
+ls -la ./database/
+```
+
+Re-initialize the database:
+```bash
+docker-compose down -v
+docker-compose up --build
+```
+
+#### Problem: Port already in use
+
+Kill the process using the port or change port in `docker-compose.yml`:
+```yaml
+ports:
+  - "5002:5002"  # Change first number to free port, e.g., "5003:5002"
+```
+
+#### Problem: Container exits immediately
+
+Check logs:
+```bash
+docker-compose logs [service-name]
+```
+
+Common causes:
+- Missing dependencies (check `requirements.txt`)
+- Database connection error (verify PostgreSQL is running)
+- API key issues (check `ORS_API_KEY` in `.env`)
+
+#### Problem: Out of disk space with Docker
+
+Clean up unused images and volumes:
+```bash
+docker system prune -a --volumes
+```
+
+### Database Schema & Seed Data
+
+The Docker setup automatically initializes the PostgreSQL database with:
+
+1. **Core Schema** (`database/core_schema.sql`):
+   - Order and Driver tables
+   - Status ENUMs
+   - Indexes and constraints
+
+2. **Relations** (`database/relations.sql`):
+   - Assignments table
+   - Spatial indexes for geo queries
+
+3. **Seed Data** (`database/seed_data.sql`):
+   - 10 sample drivers across different cities
+   - 25 sample orders for testing
+   - Pre-configured status and sequences
+
+To add new seed data, edit `database/seed_data.sql` before running Docker Compose, or use the API to create data after containers are running.
+
+---
+
+## 13. Key Design Decisions
 
 ### Microservices over Monolith
 
@@ -761,7 +960,7 @@ When a stop is marked delivered, the Order Service patches the driver's GPS coor
 
 ---
 
-## 13. Known Limitations & Future Work
+## 14. Known Limitations & Future Work
 
 | Area | Current State | Improvement |
 |---|---|---|
@@ -778,7 +977,7 @@ When a stop is marked delivered, the Order Service patches the driver's GPS coor
 
 ---
 
-## 14. Team Roles
+## 15. Team Roles
 
 | Member | Area of Responsibility |
 |---|---|
@@ -793,7 +992,7 @@ When a stop is marked delivered, the Order Service patches the driver's GPS coor
 
 ---
 
-## 15. Contributing
+## 16. Contributing
 
 1. Fork the repository and create a feature branch: `git checkout -b feature/your-feature-name`
 2. Follow existing code style — FastAPI for services, functional React with hooks for frontend.

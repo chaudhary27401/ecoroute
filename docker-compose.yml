@@ -1,0 +1,121 @@
+services:
+  # PostgreSQL 16 Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: ecoroute-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecoroute
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/core_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/relations.sql:/docker-entrypoint-initdb.d/02-relations.sql
+      - ./database/seed_data.sql:/docker-entrypoint-initdb.d/03-seed-data.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ecoroute"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ecoroute
+
+  # Driver Service
+  driver-service:
+    build:
+      context: ./services/driver-service
+      dockerfile: Dockerfile
+    container_name: ecoroute-driver-service
+    ports:
+      - "5002:5002"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ecoroute
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://127.0.0.1:5002/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - ecoroute
+    restart: unless-stopped
+
+  # Order Service
+  order-service:
+    build:
+      context: ./services/order-service
+      dockerfile: Dockerfile
+    container_name: ecoroute-order-service
+    ports:
+      - "5001:5001"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ecoroute
+      DRIVER_SVC_URL: http://driver-service:5002
+      ML_OPTIMIZER_URL: http://optimizer:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      driver-service:
+        condition: service_healthy
+      optimizer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://127.0.0.1:5001/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - ecoroute
+    restart: unless-stopped
+
+  # ML Optimizer Service
+  optimizer:
+    build:
+      context: ./optimizations
+      dockerfile: Dockerfile
+    container_name: ecoroute-optimizer
+    ports:
+      - "8000:8000"
+    environment:
+      # ORS_API_KEY is set in .env file or directly here
+      ORS_API_KEY: ${ORS_API_KEY:-eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImFlZWZkYTljNDllMzRlNDlhOGIxNWYwZGZjYzk0OGQ5IiwiaCI6Im11cm11cjY0In0=}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - ecoroute
+    restart: unless-stopped
+
+  # Frontend (React + Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ecoroute-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:5001
+    depends_on:
+      - order-service
+      - driver-service
+    networks:
+      - ecoroute
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  ecoroute:
+    driver: bridge

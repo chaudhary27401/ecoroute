@@ -1,9 +1,10 @@
 # Import SQLAlchemy tools
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+import os
 
-# PostgreSQL connection string
-DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/ecoroute"
+# PostgreSQL connection string (use environment variable or default to Docker service name)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/ecoroute")
 
 # Create DB engine
 engine = create_engine(DATABASE_URL)
