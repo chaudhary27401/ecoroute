@@ -4,11 +4,13 @@ from database import SessionLocal
 import models, schemas
 import requests
 import json
+import os
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 
-OSRM_BASE_URL  = "https://router.project-osrm.org/route/v1/driving"
-DRIVER_SVC_URL = "http://localhost:5002"
+OSRM_BASE_URL = os.getenv("OSRM_BASE_URL", "https://router.project-osrm.org/route/v1/driving")
+DRIVER_SVC_URL = os.getenv("DRIVER_SVC_URL", "http://localhost:5002")
+ML_OPTIMIZER_URL = os.getenv("ML_OPTIMIZER_URL", "http://localhost:8000")
 
 
 def get_osrm_route_geometry(locations):
@@ -98,7 +100,7 @@ def optimize(db: Session = Depends(get_db)):
 
     try:
         ml_response = requests.post(
-            "http://localhost:8000/optimize",
+            f"{ML_OPTIMIZER_URL}/optimize",
             json={"orders": payload, "num_drivers": num_drivers},
             timeout=60,
         )
